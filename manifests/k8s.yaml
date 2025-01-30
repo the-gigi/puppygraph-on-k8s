@@ -1,0 +1,323 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: puppy-iceberg
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: spark-iceberg
+  namespace: puppy-iceberg
+spec:
+  type: NodePort
+  ports:
+    - name: ui
+      port: 8888
+      targetPort: 8888
+      nodePort: 30088
+    - name: api
+      port: 8080
+      targetPort: 8080
+      nodePort: 30080
+    - name: thrift
+      port: 10000
+      targetPort: 10000
+      nodePort: 30000
+    - name: grpc
+      port: 10001
+      targetPort: 10001
+      nodePort: 30001
+  selector:
+    app: spark-iceberg
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spark-iceberg
+  namespace: puppy-iceberg
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: spark-iceberg
+  template:
+    metadata:
+      labels:
+        app: spark-iceberg
+    spec:
+      containers:
+      - name: spark-iceberg
+        image: tabulario/spark-iceberg
+        ports:
+          - containerPort: 8888
+          - containerPort: 8080
+          - containerPort: 10000
+          - containerPort: 10001
+        env:
+          - name: AWS_ACCESS_KEY_ID
+            value: "admin"
+          - name: AWS_SECRET_ACCESS_KEY
+            value: "password"
+          - name: AWS_REGION
+            value: "us-east-1"
+        volumeMounts:
+          - mountPath: /home/iceberg/warehouse
+            name: warehouse-volume
+          - mountPath: /home/iceberg/notebooks/notebooks
+            name: notebooks-volume
+          - mountPath: /parquet_data
+            name: parquet-volume
+      volumes:
+        - name: warehouse-volume
+          persistentVolumeClaim:
+            claimName: warehouse-pvc
+        - name: notebooks-volume
+          persistentVolumeClaim:
+            claimName: notebooks-pvc
+        - name: parquet-volume
+          persistentVolumeClaim:
+            claimName: parquet-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rest
+  namespace: puppy-iceberg
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8181
+      targetPort: 8181
+  selector:
+    app: iceberg-rest
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: iceberg-rest
+  namespace: puppy-iceberg
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: iceberg-rest
+  template:
+    metadata:
+      labels:
+        app: iceberg-rest
+    spec:
+      containers:
+        - name: iceberg-rest
+          image: tabulario/iceberg-rest
+          env:
+            - name: AWS_ACCESS_KEY_ID
+              value: "admin"
+            - name: AWS_SECRET_ACCESS_KEY
+              value: "password"
+            - name: AWS_REGION
+              value: "us-east-1"
+            - name: CATALOG_WAREHOUSE
+              value: s3://warehouse/
+            - name: CATALOG_IO__IMPL
+              value: org.apache.iceberg.aws.s3.S3FileIO
+            - name: CATALOG_S3_ENDPOINT
+              value: http://minio:9000
+          ports:
+            - containerPort: 8181
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  namespace: puppy-iceberg
+spec:
+  type: ClusterIP
+  ports:
+    - name: api
+      port: 9000
+      targetPort: 9000
+    - name: console
+      port: 9001
+      targetPort: 9001
+  selector:
+    app: minio
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+  namespace: puppy-iceberg
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: minio
+  template:
+    metadata:
+      labels:
+        app: minio
+    spec:
+      containers:
+        - name: minio
+          image: minio/minio
+          args:
+            - server
+            - /data
+            - --console-address
+            - ":9001"
+          env:
+            - name: MINIO_ROOT_USER
+              value: "admin"
+            - name: MINIO_ROOT_PASSWORD
+              value: "password"
+          ports:
+            - containerPort: 9000
+            - containerPort: 9001
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mc
+  namespace: puppy-iceberg
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mc
+  template:
+    metadata:
+      labels:
+        app: mc
+    spec:
+      containers:
+        - name: mc
+          image: minio/mc
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              until (/usr/bin/mc config host add minio http://minio:9000 admin password) do echo '...waiting...' && sleep 1; done;
+              /usr/bin/mc rm -r --force minio/warehouse;
+              /usr/bin/mc mb minio/warehouse;
+              /usr/bin/mc policy set public minio/warehouse;
+              tail -f /dev/null;
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: puppygraph
+  namespace: puppy-iceberg
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8081
+      targetPort: 8081
+    - name: gremlin
+      port: 8182
+      targetPort: 8182
+    - name: bolt
+      port: 7687
+      targetPort: 7687
+  selector:
+    app: puppygraph
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: puppygraph
+  namespace: puppy-iceberg
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: puppygraph
+  template:
+    metadata:
+      labels:
+        app: puppygraph
+    spec:
+      containers:
+        - name: puppygraph
+          image: puppygraph/puppygraph:stable
+          env:
+            - name: PUPPYGRAPH_USERNAME
+              value: "puppygraph"
+            - name: PUPPYGRAPH_PASSWORD
+              value: "puppygraph123"
+          ports:
+            - containerPort: 8081
+            - containerPort: 8182
+            - containerPort: 7687
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: warehouse-volume
+spec:
+  capacity:
+    storage: 5Gi
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    path: /tmp/puppygraph/warehouse
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: notebooks-volume
+spec:
+  capacity:
+    storage: 5Gi
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    path: /tmp/puppygraph/notebooks
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: parquet-volume
+spec:
+  capacity:
+    storage: 5Gi
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    path: /tmp/puppygraph/parquet_data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: warehouse-pvc
+  namespace: puppy-iceberg
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: notebooks-pvc
+  namespace: puppy-iceberg
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: parquet-pvc
+  namespace: puppy-iceberg
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi

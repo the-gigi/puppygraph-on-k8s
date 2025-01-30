@@ -1,0 +1,32 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    extraMounts:
+      - hostPath: /tmp/puppygraph/warehouse
+        containerPath: /mnt/warehouse
+      - hostPath: /tmp/puppygraph/notebooks
+        containerPath: /mnt/notebooks
+      - hostPath: /tmp/puppygraph/parquet_data
+        containerPath: /mnt/parquet_data
+    kubeadmConfigPatches:
+      - |
+        kind: ClusterConfiguration
+        apiServer:
+          extraArgs:
+            "enable-admission-plugins": "DefaultStorageClass,NamespaceLifecycle"
+    extraPortMappings:
+      - containerPort: 8080
+        hostPort: 8080
+        protocol: TCP
+      - containerPort: 9000
+        hostPort: 9000
+        protocol: TCP
+  - role: worker
+    extraMounts:
+      - hostPath: /tmp/puppygraph/warehouse
+        containerPath: /mnt/warehouse
+      - hostPath: /tmp/puppygraph/notebooks
+        containerPath: /mnt/notebooks
+      - hostPath: /tmp/puppygraph/parquet_data
+        containerPath: /mnt/parquet_data
