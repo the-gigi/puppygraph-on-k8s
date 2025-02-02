@@ -1,6 +1,6 @@
-CREATE DATABASE IF NOT EXISTS security_graph;
+CREATE DATABASE security_graph;
 
-CREATE EXTERNAL TABLE IF NOT EXISTS security_graph.Users (
+CREATE EXTERNAL TABLE security_graph.Users (
   user_id BIGINT,
   username STRING
 ) USING iceberg;

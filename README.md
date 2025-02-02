@@ -194,11 +194,11 @@ Spark master: local[*], Application Id: local-1738462674045
 spark-sql ()> CREATE DATABASE security_graph;
 Time taken: 1.027 seconds
 
-spark-sql ()> CREATE EXTERNAL TABLE IF NOT EXISTS security_graph.Users (
+spark-sql ()> CREATE EXTERNAL TABLE security_graph.Users (
             >   user_id BIGINT,
             >   username STRING
             > ) USING iceberg;
-25/02/02 02:18:26 ERROR SparkSQLDriver: Failed in [CREATE EXTERNAL TABLE IF NOT EXISTS security_graph.Users (
+25/02/02 02:18:26 ERROR SparkSQLDriver: Failed in [CREATE EXTERNAL TABLE security_graph.Users (
   user_id BIGINT,
   username STRING
 ) USING iceberg]
@@ -362,8 +362,59 @@ org.apache.iceberg.exceptions.ServiceFailureException: Server error: SdkClientEx
         at org.apache.spark.deploy.SparkSubmit$.main(SparkSubmit.scala:1129)
         at org.apache.spark.deploy.SparkSubmit.main(SparkSubmit.scala)
 spark-sql ()> 
+```
+
+The code for the REST catalog server is here:
+https://github.com/databricks/iceberg-rest-image/blob/master/src/main/java/org/apache/iceberg/rest/RESTCatalogServer.java
+
+In the logs of iceberg-rest we see the following error:
 
 ```
+❯ k logs deploy/iceberg-rest | rg minio
+2025-02-02T07:37:17.281 INFO  [org.apache.iceberg.rest.RESTCatalogServer] - Creating catalog with properties: {jdbc.password=password, s3.endpoint=http://minio.puppy-iceberg.svc.cluster.local:9000, jdbc.user=user, io-impl=org.apache.iceberg.aws.s3.S3FileIO, catalog-impl=org.apache.iceberg.jdbc.JdbcCatalog, jdbc.schema-version=V1, warehouse=s3://warehouse/, uri=jdbc:sqlite:file:/tmp/iceberg_rest_mode=memory, s3.path.style.access=true}
+Caused by: software.amazon.awssdk.core.exception.SdkClientException: Unable to execute HTTP request: warehouse.minio.puppy-iceberg.svc.cluster.local
+	Suppressed: software.amazon.awssdk.core.exception.SdkClientException: Request attempt 1 failure: Unable to execute HTTP request: warehouse.minio.puppy-iceberg.svc.cluster.local: Name or service not known
+	Suppressed: software.amazon.awssdk.core.exception.SdkClientException: Request attempt 2 failure: Unable to execute HTTP request: warehouse.minio.puppy-iceberg.svc.cluster.local
+	Suppressed: software.amazon.awssdk.core.exception.SdkClientException: Request attempt 3 failure: Unable to execute HTTP request: warehouse.minio.puppy-iceberg.svc.cluster.local
+Caused by: java.net.UnknownHostException: warehouse.minio.puppy-iceberg.svc.cluster.local```
+```
+
+The issue is that the REST catalog server is trying to connect to the Minio service using the wrong URL: 
+warehouse.minio.puppy-iceberg.svc.cluster.local
+
+It should be just `minio.puppy-iceberg.svc.cluster.local`
+
+This is a virtual domain access style. We need the path access style.
+
+All the attmpts to force path access style failed 😢. 
+
+# Hacking Core DNS
+
+First get the IP address of minio service
+
+```bash
+❯ kubectl get svc minio -o yaml | yq .spec.clusterIP
+10.96.50.71
+```
+
+Let's add this to the CoreDNS configmap:
+
+```yaml
+        template IN A *.minio {
+          match ^(.+)\.minio\.$
+          answer "{{ .Name }} 60 IN A 10.96.50.71"
+        }
+```        
+
+Then, restarting the core DNS service
+
+```
+❯ kubectl rollout restart deploy/coredns -n kube-system
+deployment.apps/coredns restarted
+```
+
+hmmmm.... that didn't work either ¯\_(ツ)_/¯
+
 
 # Reference
 
