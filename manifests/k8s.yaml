@@ -92,6 +92,46 @@ spec:
   selector:
     app: iceberg-rest
 ---
+#apiVersion: apps/v1
+#kind: Deployment
+#metadata:
+#  name: iceberg-rest
+#  namespace: puppy-iceberg
+#spec:
+#  replicas: 1
+#  selector:
+#    matchLabels:
+#      app: iceberg-rest
+#  template:
+#    metadata:
+#      labels:
+#        app: iceberg-rest
+#    spec:
+#      containers:
+#        - name: iceberg-rest
+#          image: tabulario/iceberg-rest
+#          ports:
+#            - containerPort: 8181
+#          env:
+#          - name: AWS_ACCESS_KEY_ID
+#            value: admin
+#          - name: AWS_SECRET_ACCESS_KEY
+#            value: password
+##          - name: AWS_REGION
+##            value: auto
+#          - name: CATALOG_WAREHOUSE
+#            value: s3://warehouse/
+#          - name: CATALOG_IO__IMPL
+#            value: org.apache.iceberg.aws.s3.S3FileIO
+#          - name: CATALOG_S3_ENDPOINT
+#            value: http://minio.puppy-iceberg.svc.cluster.local:9000
+#          - name: CATALOG_S3_PATH_STYLE_ACCESS
+#            value: "true"
+#          - name: REST_PORT # Must add this to override the automatic k8s env var with same name
+#            value: "8181"
+#          - name: AWS_S3_FORCE_PATH_STYLE # maybe this will help
+#            value: "true"
+#---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -110,103 +150,105 @@ spec:
       containers:
         - name: iceberg-rest
           image: tabulario/iceberg-rest
-          ports:
-            - containerPort: 8181
+          # 1) Configure HadoopCatalog (instead of S3 or JDBC, though the code uses JDBC for table listing—still fine)
           env:
-          - name: AWS_ACCESS_KEY_ID
-            value: admin
-          - name: AWS_SECRET_ACCESS_KEY
-            value: password
-#          - name: AWS_REGION
-#            value: auto
-          - name: CATALOG_WAREHOUSE
-            value: s3://warehouse/
-          - name: CATALOG_IO__IMPL
-            value: org.apache.iceberg.aws.s3.S3FileIO
-          - name: CATALOG_S3_ENDPOINT
-            value: http://minio.puppy-iceberg.svc.cluster.local:9000
-          - name: CATALOG_S3_PATH_STYLE_ACCESS
-            value: "true"
-          - name: REST_PORT # Must add this to override the automatic k8s env var with same name
-            value: "8181"
-          - name: AWS_S3_FORCE_PATH_STYLE # maybe this will help
-            value: "true"
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: minio
-  namespace: puppy-iceberg
-spec:
-  type: ClusterIP
-  ports:
-    - name: api
-      port: 9000
-      targetPort: 9000
-    - name: console
-      port: 9001
-      targetPort: 9001
-  selector:
-    app: minio
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: minio
-  namespace: puppy-iceberg
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: minio
-  template:
-    metadata:
-      labels:
-        app: minio
-    spec:
-      containers:
-        - name: minio
-          image: minio/minio
-          args:
-            - server
-            - /data
-            - --console-address
-            - ":9001"
-          env:
-            - name: MINIO_ROOT_USER
-              value: "admin"
-            - name: MINIO_ROOT_PASSWORD
-              value: "password"
-          ports:
-            - containerPort: 9000
-            - containerPort: 9001
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: mc
-  namespace: puppy-iceberg
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: mc
-  template:
-    metadata:
-      labels:
-        app: mc
-    spec:
-      containers:
-        - name: mc
-          image: minio/mc
-          command: [ "/bin/sh", "-c" ]
-          args:
-            - |
-              until (/usr/bin/mc config host add minio http://minio:9000 admin password) do echo '...waiting...' && sleep 1; done;
-              /usr/bin/mc rm -r --force minio/warehouse;
-              /usr/bin/mc mb minio/warehouse;
-              /usr/bin/mc policy set public minio/warehouse;
-              tail -f /dev/null;
+            - name: CATALOG_CATALOG__IMPL
+              value: org.apache.iceberg.hadoop.HadoopCatalog
+            - name: CATALOG_WAREHOUSE
+              value: file:/data/warehouse
+            - name: CATALOG_IO__IMPL
+              value: org.apache.iceberg.hadoop.HadoopFileIO
+            - name: REST_PORT
+              value: "8181"
+
+            # Optionally keep these if you want a local JDBC for extra metadata
+            - name: CATALOG_URI
+              value: "jdbc:sqlite:file:/tmp/iceberg_rest_mode=memory"
+
+          # 2) Mount a volume for /data/warehouse
+          volumeMounts:
+            - name: warehouse-volume
+              mountPath: /data/warehouse
+      volumes:
+        # 3) Easiest: use an emptyDir for ephemeral storage
+        - name: warehouse-volume
+          emptyDir: {}
+#---
+#apiVersion: v1
+#kind: Service
+#metadata:
+#  name: minio
+#  namespace: puppy-iceberg
+#spec:
+#  type: ClusterIP
+#  ports:
+#    - name: api
+#      port: 9000
+#      targetPort: 9000
+#    - name: console
+#      port: 9001
+#      targetPort: 9001
+#  selector:
+#    app: minio
+#---
+#apiVersion: apps/v1
+#kind: Deployment
+#metadata:
+#  name: minio
+#  namespace: puppy-iceberg
+#spec:
+#  replicas: 1
+#  selector:
+#    matchLabels:
+#      app: minio
+#  template:
+#    metadata:
+#      labels:
+#        app: minio
+#    spec:
+#      containers:
+#        - name: minio
+#          image: minio/minio
+#          args:
+#            - server
+#            - /data
+#            - --console-address
+#            - ":9001"
+#          env:
+#            - name: MINIO_ROOT_USER
+#              value: "admin"
+#            - name: MINIO_ROOT_PASSWORD
+#              value: "password"
+#          ports:
+#            - containerPort: 9000
+#            - containerPort: 9001
+#---
+#apiVersion: apps/v1
+#kind: Deployment
+#metadata:
+#  name: mc
+#  namespace: puppy-iceberg
+#spec:
+#  replicas: 1
+#  selector:
+#    matchLabels:
+#      app: mc
+#  template:
+#    metadata:
+#      labels:
+#        app: mc
+#    spec:
+#      containers:
+#        - name: mc
+#          image: minio/mc
+#          command: [ "/bin/sh", "-c" ]
+#          args:
+#            - |
+#              until (/usr/bin/mc config host add minio http://minio:9000 admin password) do echo '...waiting...' && sleep 1; done;
+#              /usr/bin/mc rm -r --force minio/warehouse;
+#              /usr/bin/mc mb minio/warehouse;
+#              /usr/bin/mc policy set public minio/warehouse;
+#              tail -f /dev/null;
 ---
 apiVersion: v1
 kind: Service

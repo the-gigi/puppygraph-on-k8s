@@ -1,88 +1,89 @@
-CREATE DATABASE security_graph;
+-- This fails on Hadoop backend, we just don't need to run this on Hadoop
+-- CREATE DATABASE security_graph;
 
-CREATE EXTERNAL TABLE security_graph.Users (
+CREATE EXTERNAL  TABLE IF NOT EXISTS security_graph.Users (
   user_id BIGINT,
   username STRING
 ) USING iceberg;
 
-CREATE EXTERNAL TABLE security_graph.InternetGateways (
+CREATE EXTERNAL  TABLE IF NOT EXISTS security_graph.InternetGateways (
   internet_gateway_id BIGINT,
   name STRING
 ) USING iceberg;
 
-CREATE EXTERNAL TABLE security_graph.UserInternetGatewayAccess (
+CREATE EXTERNAL  TABLE IF NOT EXISTS security_graph.UserInternetGatewayAccess (
   user_id BIGINT,
   internet_gateway_id BIGINT
 ) USING iceberg;
 
-CREATE EXTERNAL TABLE security_graph.VPCs (
+CREATE EXTERNAL  TABLE IF NOT EXISTS security_graph.VPCs (
   vpc_id BIGINT,
   name STRING
 ) USING iceberg;
 
-CREATE EXTERNAL TABLE security_graph.InternetGatewayVPC (
+CREATE EXTERNAL  TABLE IF NOT EXISTS security_graph.InternetGatewayVPC (
   internet_gateway_id BIGINT,
   vpc_id BIGINT
 ) USING iceberg;
 
-CREATE EXTERNAL TABLE security_graph.Subnets (
+CREATE EXTERNAL  TABLE IF NOT EXISTS security_graph.Subnets (
   subnet_id BIGINT,
   vpc_id BIGINT,
   name STRING
 ) USING iceberg;
 
-CREATE EXTERNAL TABLE security_graph.SecurityGroups (
+CREATE EXTERNAL  TABLE IF NOT EXISTS security_graph.SecurityGroups (
   security_group_id BIGINT,
   name STRING
 ) USING iceberg;
 
-CREATE EXTERNAL TABLE security_graph.SubnetSecurityGroup (
+CREATE EXTERNAL  TABLE IF NOT EXISTS security_graph.SubnetSecurityGroup (
   subnet_id BIGINT,
   security_group_id BIGINT
 ) USING iceberg;
 
-CREATE EXTERNAL TABLE security_graph.NetworkInterfaces (
+CREATE EXTERNAL  TABLE IF NOT EXISTS security_graph.NetworkInterfaces (
   network_interface_id BIGINT,
   subnet_id BIGINT,
   security_group_id BIGINT,
   name STRING
 ) USING iceberg;
 
-CREATE EXTERNAL TABLE security_graph.VMInstances (
+CREATE EXTERNAL  TABLE IF NOT EXISTS security_graph.VMInstances (
   vm_instance_id BIGINT,
   network_interface_id BIGINT,
   role_id BIGINT,
   name STRING
 ) USING iceberg;
 
-CREATE EXTERNAL TABLE security_graph.Roles (
+CREATE EXTERNAL  TABLE IF NOT EXISTS security_graph.Roles (
   role_id BIGINT,
   name STRING
 ) USING iceberg;
 
-CREATE EXTERNAL TABLE security_graph.Resources (
+CREATE EXTERNAL  TABLE IF NOT EXISTS security_graph.Resources (
   resource_id BIGINT,
   name STRING
 ) USING iceberg;
 
-CREATE EXTERNAL TABLE security_graph.RoleResourceAccess (
+CREATE EXTERNAL  TABLE IF NOT EXISTS security_graph.RoleResourceAccess (
   role_id BIGINT,
   resource_id BIGINT
 ) USING iceberg;
 
-CREATE EXTERNAL TABLE security_graph.PublicIPs (
+CREATE EXTERNAL  TABLE IF NOT EXISTS security_graph.PublicIPs (
   public_ip_id BIGINT,
   ip_address STRING,
   network_interface_id BIGINT
 ) USING iceberg;
 
-CREATE EXTERNAL TABLE security_graph.PrivateIPs (
+CREATE EXTERNAL  TABLE IF NOT EXISTS security_graph.PrivateIPs (
   private_ip_id BIGINT,
   ip_address STRING,
   network_interface_id BIGINT
 ) USING iceberg;
 
-CREATE EXTERNAL TABLE security_graph.IngressRules (
+CREATE EXTERNAL  TABLE IF NOT EXISTS security_graph.IngressRules (
   ingress_rule_id BIGINT,
   security_group_id BIGINT,
   protocol STRING,
@@ -90,7 +91,7 @@ CREATE EXTERNAL TABLE security_graph.IngressRules (
   source STRING
 ) USING iceberg;
 
-CREATE EXTERNAL TABLE security_graph.IngressRuleInternetGateway (
+CREATE EXTERNAL  TABLE IF NOT EXISTS security_graph.IngressRuleInternetGateway (
   ingress_rule_id BIGINT,
   internet_gateway_id BIGINT
 ) USING iceberg;

@@ -416,6 +416,168 @@ deployment.apps/coredns restarted
 hmmmm.... that didn't work either ¯\_(ツ)_/¯
 
 
+# Switch backend to Hadoop
+
+This is much simpler. We get rid of minio + mc and use local file system on the rest catlog server.
+
+Now, creating the database fails:
+```
+spark-sql ()> CREATE DATABASE security_graph;
+25/02/02 08:39:10 ERROR SparkSQLDriver: Failed in [CREATE DATABASE security_graph]
+org.apache.iceberg.exceptions.RESTException: Unable to process: Cannot create namespace security_graph: metadata is not supported
+```
+
+That's OK. The catalog server treats the DB as a namespace we can just skip this step and create the tables.
+
+For example:
+```
+CREATE EXTERNAL  TABLE IF NOT EXISTS security_graph.Users (
+  user_id BIGINT,
+  username STRING
+) USING iceberg;
+```
+
+To create all the tables run the script:
+
+```bash
+./prepare-db.sh
+```
+
+All the tables are created successfully, but inserting the data fails. It looks like something is hard-coded to use s3 storage, so it fails for the Hadoop file system backend.
+
+```
+spark-sql ()> INSERT INTO security_graph.Users
+            > SELECT * FROM parquet.`/parquet_data/Users.parquet`;
+25/02/02 21:13:18 ERROR Executor: Exception in task 0.0 in stage 1.0 (TID 1)
+org.apache.iceberg.exceptions.ValidationException: Invalid S3 URI, cannot determine scheme: file:/data/warehouse/security_graph/Users/data/00000-1-d7858365-5038-44c2-823d-024e1eb22be1-0-00001.parquet
+	at org.apache.iceberg.exceptions.ValidationException.check(ValidationException.java:49)
+	at org.apache.iceberg.aws.s3.S3URI.<init>(S3URI.java:72)
+	at org.apache.iceberg.aws.s3.S3OutputFile.fromLocation(S3OutputFile.java:42)
+	at org.apache.iceberg.aws.s3.S3FileIO.newOutputFile(S3FileIO.java:135)
+	at org.apache.iceberg.io.OutputFileFactory.newOutputFile(OutputFileFactory.java:105)
+```
+
+Looks like S3 is a default
+```
+❯ kubectl exec -it deploy/spark-iceberg -- cat /opt/spark/conf/spark-defaults.conf | grep -i iceberg
+spark.sql.extensions                   org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
+spark.sql.catalog.demo                 org.apache.iceberg.spark.SparkCatalog
+spark.sql.catalog.demo.io-impl         org.apache.iceberg.aws.s3.S3FileIO
+spark.eventLog.dir                     /home/iceberg/spark-events
+spark.history.fs.logDirectory          /home/iceberg/spark-events
+```
+
+This is coming from here:
+
+
+https://github.com/databricks/docker-spark-iceberg/blob/main/spark/spark-defaults.conf#L26
+
+```
+spark.sql.extensions                   org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
+spark.sql.catalog.demo                 org.apache.iceberg.spark.SparkCatalog
+spark.sql.catalog.demo.type            rest
+spark.sql.catalog.demo.uri             http://rest:8181
+spark.sql.catalog.demo.io-impl         org.apache.iceberg.aws.s3.S3FileIO
+spark.sql.catalog.demo.warehouse       s3://warehouse/wh/
+spark.sql.catalog.demo.s3.endpoint     http://minio:9000
+spark.sql.defaultCatalog               demo
+spark.eventLog.enabled                 true
+spark.eventLog.dir                     /home/iceberg/spark-events
+spark.history.fs.logDirectory          /home/iceberg/spark-events
+spark.sql.catalogImplementation        in-memory
+```
+
+Let's fix it:
+
+```bash
+❯ kubectl exec -it deploy/spark-iceberg -- \
+  sed -i -e 's|spark.sql.catalog.demo.warehouse\s\+s3://warehouse/wh/|spark.sql.catalog.demo.warehouse file:/data/warehouse|' \
+         -e 's|spark.sql.catalog.demo.io-impl\s\+org.apache.iceberg.aws.s3.S3FileIO|spark.sql.catalog.demo.io-impl org.apache.iceberg.hadoop.HadoopFileIO|' \
+  /opt/spark/conf/spark-defaults.conf
+```
+
+We can also remove the S3 endpoint, which is not needed anymore:
+
+```
+❯ kubectl exec -it deploy/spark-iceberg -- \
+  sed -i '/spark.sql.catalog.demo.s3.endpoint/d' /opt/spark/conf/spark-defaults.conf
+```
+
+Verify it was updated correctly:
+
+```
+❯ kubectl exec -it deploy/spark-iceberg -- cat /opt/spark/conf/spark-defaults.conf | rg spark
+# Default system properties included when running spark-submit.
+spark.sql.extensions                   org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
+spark.sql.catalog.demo                 org.apache.iceberg.spark.SparkCatalog
+spark.sql.catalog.demo.type            rest
+spark.sql.catalog.demo.uri             http://rest:8181
+spark.sql.catalog.demo.io-impl org.apache.iceberg.hadoop.HadoopFileIO
+spark.sql.catalog.demo.warehouse file:/data/warehouse
+spark.sql.defaultCatalog               demo
+spark.eventLog.enabled                 true
+spark.eventLog.dir                     /home/iceberg/spark-events
+spark.history.fs.logDirectory          /home/iceberg/spark-events
+spark.sql.catalogImplementation        in-memory
+```
+
+Now we can try to insert the data again:
+
+```
+❯ ./prepare_db.sh
+Finding pod for deployment spark-iceberg...
+Pod found: spark-iceberg-5597fcb949-5l78c
+Copying security_graph.sql to pod spark-iceberg-5597fcb949-5l78c at /tmp/security_graph.sql...
+File copied successfully.
+Copying parquet_data to pod spark-iceberg-5597fcb949-5l78c at /...
+Directory copied successfully.
+Executing security_graph.sql on pod spark-iceberg-5597fcb949-5l78c using spark-sql...
+Setting default log level to "WARN".
+To adjust logging level use sc.setLogLevel(newLevel). For SparkR, use setLogLevel(newLevel).
+25/02/02 22:33:42 WARN NativeCodeLoader: Unable to load native-hadoop library for your platform... using builtin-java classes where applicable
+25/02/02 22:33:43 WARN Utils: Service 'SparkUI' could not bind on port 4040. Attempting port 4041.
+Spark Web UI available at http://spark-iceberg-5597fcb949-5l78c:4041
+Spark master: local[*], Application Id: local-1738535623310
+Time taken: 1.219 seconds
+Time taken: 0.029 seconds
+Time taken: 0.02 seconds
+Time taken: 0.017 seconds
+Time taken: 0.018 seconds
+Time taken: 0.016 seconds
+Time taken: 0.015 seconds
+Time taken: 0.018 seconds
+Time taken: 0.016 seconds
+Time taken: 0.015 seconds
+Time taken: 0.023 seconds
+Time taken: 0.012 seconds
+Time taken: 0.012 seconds
+Time taken: 0.012 seconds
+Time taken: 0.012 seconds
+Time taken: 0.018 seconds
+Time taken: 0.013 seconds
+Time taken: 1.746 seconds
+Time taken: 0.225 seconds
+Time taken: 0.215 seconds
+Time taken: 0.199 seconds
+Time taken: 0.172 seconds
+Time taken: 0.17 seconds
+Time taken: 0.148 seconds
+Time taken: 0.171 seconds
+Time taken: 0.203 seconds
+Time taken: 0.152 seconds
+Time taken: 0.132 seconds
+Time taken: 0.127 seconds
+Time taken: 0.123 seconds
+Time taken: 0.158 seconds
+Time taken: 0.137 seconds
+Time taken: 0.164 seconds
+Time taken: 0.145 seconds
+SQL script executed successfully!
+```
+
+
+
+
 # Reference
 
 [Recreating Wiz's Security Graph with PuppyGraph](https://www.puppygraph.com/blog/wiz-security-graph)
