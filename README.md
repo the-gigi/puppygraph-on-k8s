@@ -425,7 +425,35 @@ Handling connection for 8081
 
 We get the exact same error if trying to upload through the web UI.
 
-![](images/upload_Schema_fail.png)
+![](images/upload_schema_fail.png)
+
+## Review the schema file and fix the URI ✅
+
+The schema had the wrong URI. We need to change from:
+
+```
+"uri": "http://iceberg-rest:8181"
+```
+to:
+
+```
+"uri": "http://rest:8181"
+```
+
+## Uploading the schema to PuppyGraph ✅
+
+Now uploading the schema works:
+
+```
+❯ curl -XPOST -H "content-type: application/json" --data-binary @./schema.json --user "puppygraph:puppygraph123" localhost:8081/schema
+Handling connection for 8081
+{"Status":"OK","Message":"Schema uploaded and gremlin server restarted"}
+```
+
+![](images/upload_schema_success.png)
+
+
+
 
 # Reference
 
