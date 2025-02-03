@@ -41,7 +41,6 @@ CSV file ./csv_data/SubnetSecurityGroup.csv has been successfully converted to P
 CSV file ./csv_data/Roles.csv has been successfully converted to Parquet. Output file: ./parquet_data/Roles.parquet
 ```
 
-
 ## Create kind cluster ✅
 
 ```bash
@@ -175,7 +174,6 @@ spark-sql ()>
 When we try this in the Kubernetes setup, we can create the `security_graph` database successfully,
 but creating a table fails:
 
-
 ```bash
 ❯ kubectl exec -it deploy/spark-iceberg -- spark-sql
 Setting default log level to "WARN".
@@ -218,14 +216,15 @@ Caused by: software.amazon.awssdk.core.exception.SdkClientException: Unable to e
 Caused by: java.net.UnknownHostException: warehouse.minio.puppy-iceberg.svc.cluster.local```
 ```
 
-The issue is that the REST catalog server is trying to connect to the Minio service using the wrong URL: 
+The issue is that the REST catalog server is trying to connect to the Minio service using the wrong
+URL:
 warehouse.minio.puppy-iceberg.svc.cluster.local
 
 It should be just `minio.puppy-iceberg.svc.cluster.local`
 
 This is a virtual domain access style. We need the path access style.
 
-All the attmpts to force path access style failed 😢. 
+All the attmpts to force path access style failed 😢.
 
 ## Hacking Core DNS ❌
 
@@ -240,8 +239,8 @@ Let's add this to the CoreDNS configmap:
 
 ```yaml
         template IN A *.minio {
-          match ^(.+)\.minio\.$
-          answer "{{ .Name }} 60 IN A 10.96.50.71"
+        match ^(.+)\.minio\.$
+        answer "{{ .Name }} 60 IN A 10.96.50.71"
         }
 ```        
 
@@ -254,10 +253,10 @@ deployment.apps/coredns restarted
 
 hmmmm.... that didn't work either ¯\_(ツ)_/¯
 
-
 # Switch backend to Hadoop File System ✅
 
-This is much simpler. We get rid of minio + mc and use the local file system on the rest catlog server.
+This is much simpler. We get rid of minio + mc and use the local file system on the rest catlog
+server.
 
 ```
 ❯ kubectl get deployment -n puppy-iceberg
@@ -274,7 +273,9 @@ spark-iceberg   NodePort    10.96.62.23     <none>        8888:30088/TCP,8080:30
 ```
 
 ## Create the database ❌
+
 Now, creating the database fails:
+
 ```
 spark-sql ()> CREATE DATABASE security_graph;
 25/02/02 08:39:10 ERROR SparkSQLDriver: Failed in [CREATE DATABASE security_graph]
@@ -283,9 +284,11 @@ org.apache.iceberg.exceptions.RESTException: Unable to process: Cannot create na
 
 ## Create the tables ✅
 
-That's OK. The catalog server treats the DB as a namespace we can just skip this step and create the tables directly.
+That's OK. The catalog server treats the DB as a namespace we can just skip this step and create the
+tables directly.
 
 For example:
+
 ```
 CREATE EXTERNAL  TABLE IF NOT EXISTS security_graph.Users (
   user_id BIGINT,
@@ -301,7 +304,8 @@ To create all the tables run the script:
 
 ## Insert the data ❌
 
-All the tables are created successfully, but inserting the data fails. It looks like something is hard-coded to use s3 storage, so it fails for the Hadoop file system backend.
+All the tables are created successfully, but inserting the data fails. It looks like something is
+hard-coded to use s3 storage, so it fails for the Hadoop file system backend.
 
 ```
 spark-sql ()> INSERT INTO security_graph.Users
@@ -318,6 +322,7 @@ org.apache.iceberg.exceptions.ValidationException: Invalid S3 URI, cannot determ
 ## Debugging the issue 🪲
 
 Looks like S3 is a default
+
 ```
 ❯ kubectl exec -it deploy/spark-iceberg -- cat /opt/spark/conf/spark-defaults.conf | grep -i iceberg
 spark.sql.extensions                   org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
@@ -409,7 +414,8 @@ SQL script executed successfully!
 
 ## Uploading the schema to PuppyGraph fails ❌
 
-The next step is to upload a schema to PuppyGraph. First, let's port-forward the service, so we can access it locally:
+The next step is to upload a schema to PuppyGraph. First, let's port-forward the service, so we can
+access it locally:
 
 ```bash
 kubectl port-forward deploy/puppygraph 8081:8081 -n puppy-iceberg
@@ -434,6 +440,7 @@ The schema had the wrong URI. We need to change from:
 ```
 "uri": "http://iceberg-rest:8181"
 ```
+
 to:
 
 ```
@@ -452,8 +459,169 @@ Handling connection for 8081
 
 ![](images/upload_schema_success.png)
 
+## Querying the graph fails ❌
 
+Using a sample query fails with "[4004]Data access execution failed":
 
+```
+g.V().hasLabel('NetworkInterface').as('ni')
+  .where(
+    __.not(
+      __.in('PROTECTS').hasLabel('SecurityGroup')
+    )
+  )
+  .optional(
+    __.out('ATTACHED_TO').hasLabel('VMInstance').as('vm')
+  )
+  .path()
+```
+
+![](images/query_graph_fail.png)
+
+The logs are not very helpful. They just say the /submit request failed with 400:
+
+```
+❯ kubectl logs deploy/puppygraph
+[Frontend] [2025-02-03 00:21:58] INFO
+PuppyGraph (puppygraph.com) version: 0.53 - A graph analytics engine for all your data.
+[Frontend] [2025-02-03 00:21:58] INFO  Build timestamp: 2025-01-17_00:21:26
+[Frontend] [2025-02-03 00:21:58] INFO  Getting memory limit in kubernetes
+[Frontend] [2025-02-03 00:21:58] WARNING Unable to get total memory, skip memory limit inference: failed to get container memory limit in kubernetes: could not find cgroup memory limit: cgroup file not found: stat /sys/fs/cgroup/memory/docker/memory.limit_in_bytes: no such file or directory
+[Frontend] [2025-02-03 00:21:58] INFO  Using default config
+[Frontend] [2025-02-03 00:21:58] INFO  Start as single all-in-one node
+[Frontend] [2025-02-03 00:21:58] INFO  Starting data access FE.
+[Frontend] [2025-02-03 00:21:58] INFO  [fe] Process ready to start
+[Frontend] [2025-02-03 00:21:58] INFO  Waiting for data access FE to start.
+[Frontend] [2025-02-03 00:21:58] INFO  Poll[op=GetConnection] start interval=1s, reportInterval=30s, timeout=5m0s
+[Frontend] [2025-02-03 00:21:58] INFO  [fe][0x40001fe980] Monitor begin: pid[139]
+[Frontend] [2025-02-03 00:21:59] INFO  Poll[op=GetConnection] success, elapsed=1.002438875s
+[Frontend] [2025-02-03 00:21:59] INFO  Waiting for data access FE to be ready.
+[Frontend] [2025-02-03 00:21:59] INFO  Poll[op=WaitForAlive] start interval=1s, reportInterval=30s, timeout=24h0m0s
+[Frontend] [2025-02-03 00:22:11] INFO  Poll[op=WaitForAlive] success, elapsed=12.21189063s
+[Frontend] [2025-02-03 00:22:11] INFO  Data access FE is ready.
+[Frontend] [2025-02-03 00:22:11] INFO  Waiting for data access FE to start.
+[Frontend] [2025-02-03 00:22:11] INFO  Poll[op=GetConnection] start interval=1s, reportInterval=30s, timeout=5m0s
+[Frontend] [2025-02-03 00:22:12] INFO  Poll[op=GetConnection] success, elapsed=1.005978334s
+[Frontend] [2025-02-03 00:22:12] INFO  Waiting for data access FE to be ready.
+[Frontend] [2025-02-03 00:22:12] INFO  Poll[op=WaitForAlive] start interval=1s, reportInterval=30s, timeout=24h0m0s
+[Frontend] [2025-02-03 00:22:13] INFO  Poll[op=WaitForAlive] success, elapsed=1.082096209s
+[Frontend] [2025-02-03 00:22:13] INFO  Data access FE is ready.
+[Frontend] [2025-02-03 00:22:13] INFO  Starting data access BE.
+[Frontend] [2025-02-03 00:22:13] INFO  [be] Process ready to start
+[Frontend] [2025-02-03 00:22:13] INFO  {IP:10.244.1.41 Preferred:false Loopback:false IsV4:true}
+[Frontend] [2025-02-03 00:22:13] INFO  {IP:127.0.0.1 Preferred:false Loopback:true IsV4:true}
+[Frontend] [2025-02-03 00:22:13] INFO  {IP:fe80::c4b1:f1ff:fe4e:26ec Preferred:false Loopback:false IsV4:false}
+[Frontend] [2025-02-03 00:22:13] INFO  {IP:::1 Preferred:false Loopback:true IsV4:false}
+[Frontend] [2025-02-03 00:22:13] INFO  Connecting BE. Preferred IP: 10.244.1.41:9005
+[Frontend] [2025-02-03 00:22:13] INFO  Poll[op=AddBE] start interval=1s, reportInterval=30s, timeout=5m0s
+[Frontend] [2025-02-03 00:22:13] INFO  [be][0x40003565a0] Monitor begin: pid[595]
+[Frontend] [2025-02-03 00:22:14] INFO  Poll[op=AddBE] success, elapsed=1.077371375s
+[Frontend] [2025-02-03 00:22:24] INFO  Waiting for data access BE to be ready.
+[Frontend] [2025-02-03 00:22:24] INFO  Poll[op=WaitForAlive] start interval=1s, reportInterval=30s, timeout=24h0m0s
+[Frontend] [2025-02-03 00:22:25] INFO  Poll[op=WaitForAlive] success, elapsed=1.035170251s
+[Frontend] [2025-02-03 00:22:25] INFO  Data access BE is ready.
+[Frontend] [2025-02-03 00:22:25] INFO  PuppyGraph nodes started. Configuring...
+[Frontend] [2025-02-03 00:22:25] INFO  Configuring gremlin server...
+[Frontend] [2025-02-03 00:22:25] INFO  Overwriting properties...
+[Frontend] [2025-02-03 00:22:25] INFO  Overwritten properties saved!
+[Frontend] [2025-02-03 00:22:25] INFO  Preparing demo data...
+[Frontend] [2025-02-03 00:22:25] INFO  PuppyGraph server boot success!
+[Frontend] [2025-02-03 00:22:25] INFO  Starting Jupyter graph notebook
+[Frontend] [2025-02-03 00:22:25] INFO  Starting BOLT server
+[Frontend] [2025-02-03 00:22:25] INFO  [bolt] Process ready to start
+[Frontend] [2025-02-03 00:22:25] INFO  Starting gremlin server, without initial schema.
+[Frontend] [2025-02-03 00:22:25] INFO  Restarting Gremlin server...
+[Frontend] [2025-02-03 00:22:25] INFO  [bolt][0x4000484010] Monitor begin: pid[1379]
+[Frontend] [2025-02-03 00:22:25] INFO  Starting GOTTY server
+[Frontend] [2025-02-03 00:22:25] INFO  [gotty] Process ready to start
+[Frontend] [2025-02-03 00:22:25] INFO  [gotty][0x4000784120] Monitor begin: pid[1387]
+[Frontend] [2025-02-03 00:22:25] INFO  [notebook] Process ready to start
+[Frontend] [2025-02-03 00:22:25] INFO  [notebook][0x40007841a0] Monitor begin
+[Frontend] [2025-02-03 00:22:25] INFO  [gremlin] Process ready to start
+[Frontend] [2025-02-03 00:22:25] INFO  [gremlin] Start heartbeat monitoring in 5m0s
+Server not running
+Server started 1414.
+Bolt server started
+2025/02/03 00:22:25 GoTTY is starting with command: ./bin/puppygraph
+2025/02/03 00:22:25 Using Basic Authentication
+2025/02/03 00:22:25 Permitting clients to write input to the PTY.
+2025/02/03 00:22:25 HTTP server is listening at: http://127.0.0.1:8080/
+[GIN] 2025/02/03 - 00:23:06 | 304 |    5.644916ms |       127.0.0.1 | GET      "/"
+[GIN] 2025/02/03 - 00:23:07 | 401 |    2.504125ms |       127.0.0.1 | GET      "/status"
+[GIN] 2025/02/03 - 00:23:07 | 200 |    2.869083ms |       127.0.0.1 | GET      "/profile"
+[GIN] 2025/02/03 - 00:23:07 | 200 |     449.458µs |       127.0.0.1 | GET      "/sso_enabled"
+[GIN] 2025/02/03 - 00:23:09 | 200 |   87.348209ms |       127.0.0.1 | POST     "/login"
+[GIN] 2025/02/03 - 00:23:09 | 200 |     906.416µs |       127.0.0.1 | GET      "/profile"
+[GIN] 2025/02/03 - 00:23:09 | 200 |     669.792µs |       127.0.0.1 | GET      "/profile"
+[Frontend] [2025-02-03 00:23:09] INFO  cluster status: {Frontend:{Host:127.0.0.1:9030 AliveCount:1 Count:1 RequiredCount:1 Leaders:[{Name:puppygraph-b4d67c596-s6sk4_9001_1738542122584 Address:puppygraph-b4d67c596-s6sk4 Role:LEADER Join:true Alive:true LastHeartBeat:2025-02-03 00:23:08 IsHelper:true ErrorMsg: editLogPort:9001}]} Backend:{AliveCount:1 Count:1 RequiredCount:1 Followers:[{Id:10001 Address:10.244.1.41 Alive:true LastHeartBeat:2025-02-03 00:23:08 DataUsedCapacity:0.000 B AvailCapacity:7.135 GB TotalCapacity:58.367 GB UsedPct:87.78 % MaxDiskUsedPct:87.78 % ErrorMsg: CpuUsedPct:0.1 % heartbeatPort:9005}]} ReadyForCluster:false ReadyForGremlinServer:true ProfileEnabled:false DiskSpillEnabled:true PasswordEnabled:true StartInfoMsg:success}
+[GIN] 2025/02/03 - 00:23:09 | 200 |  450.545084ms |       127.0.0.1 | GET      "/status"
+[GIN] 2025/02/03 - 00:23:09 | 200 |   46.342792ms |       127.0.0.1 | GET      "/ui-api/catalog"
+[Frontend] [2025-02-03 00:23:10] INFO  cluster status: {Frontend:{Host:127.0.0.1:9030 AliveCount:1 Count:1 RequiredCount:1 Leaders:[{Name:puppygraph-b4d67c596-s6sk4_9001_1738542122584 Address:puppygraph-b4d67c596-s6sk4 Role:LEADER Join:true Alive:true LastHeartBeat:2025-02-03 00:23:08 IsHelper:true ErrorMsg: editLogPort:9001}]} Backend:{AliveCount:1 Count:1 RequiredCount:1 Followers:[{Id:10001 Address:10.244.1.41 Alive:true LastHeartBeat:2025-02-03 00:23:08 DataUsedCapacity:0.000 B AvailCapacity:7.135 GB TotalCapacity:58.367 GB UsedPct:87.78 % MaxDiskUsedPct:87.78 % ErrorMsg: CpuUsedPct:0.1 % heartbeatPort:9005}]} ReadyForCluster:false ReadyForGremlinServer:true ProfileEnabled:false DiskSpillEnabled:true PasswordEnabled:true StartInfoMsg:success}
+[GIN] 2025/02/03 - 00:23:10 | 200 |   92.367375ms |       127.0.0.1 | GET      "/status"
+[Frontend] [2025-02-03 00:23:24] INFO  Restarting Gremlin server...
+[Frontend] [2025-02-03 00:23:24] INFO  [gremlin] Process ready to stop
+[Frontend] [2025-02-03 00:23:27] INFO  [gremlin] Process ready to start
+[Frontend] [2025-02-03 00:23:27] INFO  [gremlin] Start heartbeat monitoring in 5m0s
+Server not running
+Server started 1741.
+[GIN] 2025/02/03 - 00:23:38 | 200 | 16.707493883s |       127.0.0.1 | POST     "/schema"
+[Frontend] [2025-02-03 00:23:38] INFO  cluster status: {Frontend:{Host:127.0.0.1:9030 AliveCount:1 Count:1 RequiredCount:1 Leaders:[{Name:puppygraph-b4d67c596-s6sk4_9001_1738542122584 Address:puppygraph-b4d67c596-s6sk4 Role:LEADER Join:true Alive:true LastHeartBeat:2025-02-03 00:23:33 IsHelper:true ErrorMsg: editLogPort:9001}]} Backend:{AliveCount:1 Count:1 RequiredCount:1 Followers:[{Id:10001 Address:10.244.1.41 Alive:true LastHeartBeat:2025-02-03 00:23:33 DataUsedCapacity:0.000 B AvailCapacity:7.063 GB TotalCapacity:58.367 GB UsedPct:87.90 % MaxDiskUsedPct:87.90 % ErrorMsg: CpuUsedPct:0.7 % heartbeatPort:9005}]} ReadyForCluster:false ReadyForGremlinServer:true ProfileEnabled:false DiskSpillEnabled:true PasswordEnabled:true StartInfoMsg:success}
+[GIN] 2025/02/03 - 00:23:38 | 200 |  208.473709ms |       127.0.0.1 | GET      "/status"
+[GIN] 2025/02/03 - 00:23:38 | 200 |   21.865375ms |       127.0.0.1 | GET      "/schemajson"
+[GIN] 2025/02/03 - 00:24:07 | 200 |    2.293917ms |       127.0.0.1 | GET      "/profile"
+[Frontend] [2025-02-03 00:24:07] INFO  cluster status: {Frontend:{Host:127.0.0.1:9030 AliveCount:1 Count:1 RequiredCount:1 Leaders:[{Name:puppygraph-b4d67c596-s6sk4_9001_1738542122584 Address:puppygraph-b4d67c596-s6sk4 Role:LEADER Join:true Alive:true LastHeartBeat:2025-02-03 00:24:03 IsHelper:true ErrorMsg: editLogPort:9001}]} Backend:{AliveCount:1 Count:1 RequiredCount:1 Followers:[{Id:10001 Address:10.244.1.41 Alive:true LastHeartBeat:2025-02-03 00:24:03 DataUsedCapacity:0.000 B AvailCapacity:7.063 GB TotalCapacity:58.367 GB UsedPct:87.90 % MaxDiskUsedPct:87.90 % ErrorMsg: CpuUsedPct:0.1 % heartbeatPort:9005}]} ReadyForCluster:false ReadyForGremlinServer:true ProfileEnabled:false DiskSpillEnabled:true PasswordEnabled:true StartInfoMsg:success}
+[GIN] 2025/02/03 - 00:24:07 | 200 |   303.16725ms |       127.0.0.1 | GET      "/status"
+[GIN] 2025/02/03 - 00:24:16 | 200 |  357.140625ms |       127.0.0.1 | POST     "/submit"
+[GIN] 2025/02/03 - 00:24:36 | 400 |  611.071626ms |       127.0.0.1 | POST     "/submit"
+```
+
+## Check the code 💻
+
+The error comes form here:
+https://github.com/puppygraph/puppygraph-query/blob/main/cmd/server/handlers.go#L69
+
+```go
+func submitHandler(c *gin.Context) {
+	v, exists := c.Get("conf")
+	if !exists {
+		c.JSON(http.StatusInternalServerError, "Cannot load config")
+	}
+	config := v.(*lib.Config)
+
+	var req SubmitRequest
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, "Invalid request")
+		return
+	}
+
+	response, err := lib.Submit(c, config, req.Query)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, fmt.Sprintf("gremlin query error: %v", err))
+		return
+	}
+```
+
+It originates from the 3rd party library tinkerpop/gremlin-go embedded in the project:
+https://github.com/puppygraph/puppygraph-query/blob/main/gremlin-go/driver/client.go#L155
+
+```
+// SubmitWithOptions submits a Gremlin script to the server with specified RequestOptions and returns a ResultSet.
+func (client *Client) SubmitWithOptions(traversalString string, requestOptions RequestOptions) (ResultSet, error) {
+	client.logHandler.logf(Debug, submitStartedString, traversalString)
+	request := makeStringRequest(traversalString, client.traversalSource, client.session, requestOptions)
+	result, err := client.connections.write(&request)
+	if err != nil {
+		client.logHandler.logf(Error, logErrorGeneric, "Client.Submit()", err.Error())
+	}
+	return result, err
+}
+```
+
+Looking for "4004" or "Data access execution failed" in the codebase yields no results. It's
+probably coming from one of the dependencies.
+
+Also 4004 is a strange number for an error, which is close to 404 (Not found), but the description
+of "Data access execution failed" points in another direction.
 
 # Reference
 
