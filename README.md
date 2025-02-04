@@ -623,7 +623,23 @@ probably coming from one of the dependencies.
 Also 4004 is a strange number for an error, which is close to 404 (Not found), but the description
 of "Data access execution failed" points in another direction.
 
+# Use the Nessie catalog ✅
+
+Bring Minio back and use the Nessie catalog instead of the HDFS catalog.
+
+We need to update the spark-iceberg configuration:
+
+```bash
+kubectl exec -it deploy/spark-iceberg -- \
+  sed -i -e 's|spark.sql.catalog.demo.uri[[:space:]]*http://rest:8181|spark.sql.catalog.demo.uri             http://nessie:19120/iceberg|' \
+  /opt/spark/conf/spark-defaults.conf
+```
+
+Note that unlike the S3 and HDFS catalogs, the Nessie catalog requires an extra `/iceberg` path in the URI.
+
+
 # Reference
 
+[Querying Nessie data as a graph](https://docs.puppygraph.com/getting-started/querying-nessie-data-as-a-graph/)
 [Recreating Wiz's Security Graph with PuppyGraph](https://www.puppygraph.com/blog/wiz-security-graph)
 [Cloud Security Graph Demo](https://github.com/puppygraph/puppygraph-getting-started/blob/main/use-case-demos/cloud-security-graph-demo/README.md#data-import)
