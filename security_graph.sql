@@ -1,5 +1,5 @@
 -- This fails on Hadoop backend, we just don't need to run this on Hadoop
--- CREATE DATABASE security_graph;
+CREATE DATABASE IF NOT EXISTS security_graph;
 
 CREATE EXTERNAL  TABLE IF NOT EXISTS security_graph.Users (
   user_id BIGINT,

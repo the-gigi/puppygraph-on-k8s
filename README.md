@@ -623,9 +623,10 @@ probably coming from one of the dependencies.
 Also 4004 is a strange number for an error, which is close to 404 (Not found), but the description
 of "Data access execution failed" points in another direction.
 
-# Use the Nessie catalog ✅
+# Use the Nessie catalog - another fail ❌
 
-Bring Minio back and use the Nessie catalog instead of the HDFS catalog.
+Let's bring Minio back and use the Nessie catalog instead of the HDFS catalog. Nessie has a
+configuration option for path style access, which should work with Minio.
 
 We need to update the spark-iceberg configuration:
 
@@ -635,8 +636,69 @@ kubectl exec -it deploy/spark-iceberg -- \
   /opt/spark/conf/spark-defaults.conf
 ```
 
-Note that unlike the S3 and HDFS catalogs, the Nessie catalog requires an extra `/iceberg` path in the URI.
+Note that unlike the S3 and HDFS catalogs, the Nessie catalog requires an extra `/iceberg` path in
+the URI.
 
+With this setup we can can successfully connect to spark-sql and the path access gets us one step
+closer as the warehouse bucket is recognized. But, spark-sql fails to create the table because it can't access the bucket:
+
+```
+root@spark-iceberg-5fbfdd6f7d-4hl98:/opt/spark# spark-sql
+Setting default log level to "WARN".
+To adjust logging level use sc.setLogLevel(newLevel). For SparkR, use setLogLevel(newLevel).
+25/02/04 06:18:59 WARN NativeCodeLoader: Unable to load native-hadoop library for your platform... using builtin-java classes where applicable
+25/02/04 06:18:59 WARN Utils: Service 'SparkUI' could not bind on port 4040. Attempting port 4041.
+Spark Web UI available at http://spark-iceberg-5fbfdd6f7d-4hl98:4041
+Spark master: local[*], Application Id: local-1738649939899
+spark-sql ()> CREATE EXTERNAL  TABLE IF NOT EXISTS security_graph.Users (
+            >   user_id BIGINT,
+            >   username STRING
+            > ) USING iceberg;
+25/02/04 06:19:32 ERROR SparkSQLDriver: Failed in [CREATE EXTERNAL  TABLE IF NOT EXISTS security_graph.Users (
+  user_id BIGINT,
+  username STRING
+) USING iceberg]
+java.lang.IllegalArgumentException: Location for ICEBERG_TABLE 'security_graph.Users' cannot be associated with any configured object storage location: Missing access key and secret for STATIC authentication mode
+```
+
+Now, we have the AWS env vars defined correctly in the container:
+
+```
+❯ k exec -it deploy/spark-iceberg -- printenv | rg AWS
+AWS_REGION=us-east-1
+AWS_ACCESS_KEY_ID=admin
+AWS_SECRET_ACCESS_KEY=password
+```
+
+We can even access the `warehouse` bucket directly from the container (after installing the aws CLI):
+
+```
+❯ k exec -it deploy/spark-iceberg -- bash
+root@spark-iceberg-5fbfdd6f7d-4hl98:/opt/spark# pip3 install --upgrade awscli
+Collecting awscli
+  Using cached awscli-1.37.12-py3-none-any.whl (4.6 MB)
+Requirement already satisfied: botocore==1.36.12 in /usr/local/lib/python3.9/site-packages (from awscli) (1.36.12)
+Requirement already satisfied: PyYAML<6.1,>=3.10 in /usr/local/lib/python3.9/site-packages (from awscli) (6.0.1)
+Requirement already satisfied: s3transfer<0.12.0,>=0.11.0 in /usr/local/lib/python3.9/site-packages (from awscli) (0.11.2)
+Requirement already satisfied: rsa<4.8,>=3.1.2 in /usr/local/lib/python3.9/site-packages (from awscli) (4.7.2)
+Requirement already satisfied: docutils<0.17,>=0.10 in /usr/local/lib/python3.9/site-packages (from awscli) (0.16)
+Requirement already satisfied: colorama<0.4.7,>=0.2.5 in /usr/local/lib/python3.9/site-packages (from awscli) (0.4.6)
+Requirement already satisfied: jmespath<2.0.0,>=0.7.1 in /usr/local/lib/python3.9/site-packages (from botocore==1.36.12->awscli) (1.0.1)
+Requirement already satisfied: python-dateutil<3.0.0,>=2.1 in /usr/local/lib/python3.9/site-packages (from botocore==1.36.12->awscli) (2.9.0.post0)
+Requirement already satisfied: urllib3<1.27,>=1.25.4 in /usr/local/lib/python3.9/site-packages (from botocore==1.36.12->awscli) (1.26.20)
+Requirement already satisfied: pyasn1>=0.1.3 in /usr/local/lib/python3.9/site-packages (from rsa<4.8,>=3.1.2->awscli) (0.6.1)
+Requirement already satisfied: six>=1.5 in /usr/local/lib/python3.9/site-packages (from python-dateutil<3.0.0,>=2.1->botocore==1.36.12->awscli) (1.16.0)
+Installing collected packages: awscli
+Successfully installed awscli-1.37.12
+WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv
+
+[notice] A new release of pip is available: 23.0.1 -> 25.0
+[notice] To update, run: pip install --upgrade pip
+root@spark-iceberg-5fbfdd6f7d-4hl98:/opt/spark# aws --endpoint-url http://minio:9000 s3 ls
+2025-02-04 02:48:14 warehouse
+```
+
+The problem is that spark-sql is not using the AWS env vars. Unclear how to provide the credentials.
 
 # Reference
 
